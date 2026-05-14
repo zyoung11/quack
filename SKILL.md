@@ -5,6 +5,18 @@ description: DuckDuckGo search and web page content extraction via the quack CLI
 
 # quack
 
+## Check
+
+```bash
+quack --help
+```
+
+## Install if not exist
+
+```bash
+go install github.com/zyoung11/quack@v1.0.0
+```
+
 ## Search
 
 ```bash

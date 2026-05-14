@@ -7,7 +7,7 @@ DuckDuckGo CLI search + page content fetcher with JSON outputs.
 ## Install
 
 ```bash
-go install github.com/zyoung11/quack@latest
+go install github.com/zyoung11/quack@v1.0.0
 ```
 
 Or build from source:
