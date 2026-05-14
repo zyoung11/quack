@@ -130,11 +130,15 @@ func doSearch(args cliArgs) {
 		die("read response: %v", err)
 	}
 
-	if isDDGChallenge(htmlBytes) {
-		die("DuckDuckGo is blocking this request (CAPTCHA challenge). Try again later or use a different network.")
+	allResults := parseSearchResults(bytes.NewReader(htmlBytes))
+	if isDDGChallenge(htmlBytes) || len(allResults) == 0 {
+		randomDelay()
+		allResults = searchLite(args.query, args.region)
+		if len(allResults) == 0 {
+			die("DuckDuckGo is blocking this request (CAPTCHA challenge). Try again later or use a different network.")
+		}
 	}
 
-	allResults := parseSearchResults(bytes.NewReader(htmlBytes))
 	if args.num > 0 && args.num < len(allResults) {
 		allResults = allResults[:args.num]
 	}
@@ -484,6 +488,120 @@ func parseSearchResults(r io.Reader) []Result {
 				if inSnippet {
 					cur.abstract += text
 				}
+			}
+		}
+	}
+}
+
+func searchLite(query, region string) []Result {
+	formData := url.Values{}
+	formData.Set("q", query)
+	formData.Set("kl", region)
+
+	body := strings.NewReader(formData.Encode())
+	req, err := http.NewRequest("POST", "https://lite.duckduckgo.com/lite/", body)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", randomUA())
+	req.Header.Set("Accept-Encoding", "gzip")
+
+	resp, err := ddgClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	htmlBytes, err := io.ReadAll(decompress(resp))
+	if err != nil {
+		return nil
+	}
+
+	if isDDGChallenge(htmlBytes) {
+		return nil
+	}
+
+	return parseLiteResults(bytes.NewReader(htmlBytes))
+}
+
+func parseLiteResults(r io.Reader) []Result {
+	results := make([]Result, 0)
+	z := html.NewTokenizer(r)
+
+	var title, url, abstract string
+	haveLink := false
+	inTitle := false
+	inSnippet := false
+
+	for {
+		tt := z.Next()
+		switch tt {
+		case html.ErrorToken:
+			if z.Err() == io.EOF {
+				if haveLink && url != "" {
+					results = append(results, Result{
+						Index:    len(results) + 1,
+						Title:    strings.TrimSpace(title),
+						URL:      url,
+						Abstract: strings.TrimSpace(abstract),
+					})
+				}
+				return results
+			}
+			return results
+
+		case html.StartTagToken, html.SelfClosingTagToken:
+			name, hasAttrs := z.TagName()
+			tag := string(name)
+			cls := ""
+			if hasAttrs {
+				cls = getAttr(z, "class")
+			}
+
+			if tag == "a" && hasClass(cls, "result-link") {
+				href := getAttr(z, "href")
+				if href != "" {
+					if haveLink && url != "" {
+						results = append(results, Result{
+							Index:    len(results) + 1,
+							Title:    strings.TrimSpace(title),
+							URL:      url,
+							Abstract: strings.TrimSpace(abstract),
+						})
+					}
+					title = ""
+					url = href
+					abstract = ""
+					haveLink = true
+					inTitle = true
+				}
+				continue
+			}
+
+			if tag == "td" && hasClass(cls, "result-snippet") {
+				inSnippet = true
+				continue
+			}
+
+		case html.EndTagToken:
+			name, _ := z.TagName()
+			tag := string(name)
+
+			if tag == "a" {
+				inTitle = false
+			}
+			if tag == "td" {
+				inSnippet = false
+			}
+
+		case html.TextToken:
+			text := string(z.Text())
+			if inTitle {
+				title += text
+			}
+			if inSnippet {
+				abstract += text
 			}
 		}
 	}
