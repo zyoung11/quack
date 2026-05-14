@@ -1,4 +1,4 @@
-module quack
+module github.com/zyoung11/quack
 
 go 1.26.2
 
