@@ -1,6 +1,6 @@
 # quack
 
-DuckDuckGo CLI search + page content fetcher with JSON outputs.
+Zero configuration and zero dependencies DuckDuckGo CLI search + page content fetcher with JSON outputs.
 
 ![Example](./example.jpg)
 
