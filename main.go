@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -100,42 +102,87 @@ const (
 )
 
 func doSearch(args cliArgs) {
-	randomDelay()
+	var allResults []Result
+	var source string
 
-	formData := url.Values{}
-	formData.Set("q", args.query)
-	formData.Set("b", "")
-	formData.Set("df", args.timeSpan)
-	formData.Set("kf", "-1")
-	formData.Set("kh", "1")
-	formData.Set("kl", args.region)
-	formData.Set("kp", "-1")
-	formData.Set("k1", "-1")
+	if args.engine != "" {
+		// Single engine mode
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
 
-	body := strings.NewReader(formData.Encode())
-	req, err := http.NewRequest("POST", "https://html.duckduckgo.com/html", body)
-	if err != nil {
-		die("create request: %v", err)
-	}
-	setHeaders(req)
+		engine := strings.ToLower(args.engine)
+		var results []Result
+		var err error
+		switch engine {
+		case "ddg", "duckduckgo":
+			results, err = searchDDG(ctx, args)
+			source = "ddg"
+		case "bing":
+			results, err = searchBing(ctx, args)
+			source = "bing"
+		default:
+			die("unknown engine %q (use ddg or bing)", args.engine)
+		}
+		if err != nil {
+			die("search failed on %s: %v", source, err)
+		}
+		allResults = results
+	} else {
+		// Parallel mode: try both, DDG preferred
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
 
-	resp, err := ddgClient.Do(req)
-	if err != nil {
-		die("search request: %v", err)
-	}
-	defer resp.Body.Close()
+		type engineResult struct {
+			name    string
+			results []Result
+		}
 
-	htmlBytes, err := io.ReadAll(decompress(resp))
-	if err != nil {
-		die("read response: %v", err)
-	}
+		ch := make(chan engineResult, 2)
 
-	allResults := parseSearchResults(bytes.NewReader(htmlBytes))
-	if isDDGChallenge(htmlBytes) || len(allResults) == 0 {
-		randomDelay()
-		allResults = searchLite(args.query, args.region)
-		if len(allResults) == 0 {
-			die("DuckDuckGo is blocking this request (CAPTCHA challenge). Try again later or use a different network.")
+		go func() {
+			results, err := searchDDG(ctx, args)
+			if err == nil {
+				select {
+				case ch <- engineResult{"ddg", results}:
+				case <-ctx.Done():
+				}
+			}
+		}()
+
+		go func() {
+			results, err := searchBing(ctx, args)
+			if err == nil {
+				select {
+				case ch <- engineResult{"bing", results}:
+				case <-ctx.Done():
+				}
+			}
+		}()
+
+		var ddgResults, bingResults []Result
+	loop:
+		for range 2 {
+			select {
+			case r := <-ch:
+				if r.name == "ddg" {
+					ddgResults = r.results
+				} else {
+					bingResults = r.results
+				}
+			case <-ctx.Done():
+				break loop
+			}
+		}
+
+		switch {
+		case ddgResults != nil:
+			allResults = ddgResults
+			source = "ddg"
+		case bingResults != nil:
+			allResults = bingResults
+			source = "bing"
+		default:
+			die("all search engines failed")
 		}
 	}
 
@@ -150,6 +197,7 @@ func doSearch(args cliArgs) {
 		"num":       args.num,
 		"returned":  len(allResults),
 		"region":    args.region,
+		"source":    source,
 		"results":   allResults,
 	}
 	if args.timeSpan != "" {
@@ -178,6 +226,258 @@ func doFetch(targetURL string, _ cliArgs) {
 		output["published"] = result.Published
 	}
 	printJSON(output)
+}
+
+func searchDDG(ctx context.Context, args cliArgs) ([]Result, error) {
+	randomDelay()
+
+	query := args.query
+	if args.site != "" {
+		query += " site:" + args.site
+	}
+
+	formData := url.Values{}
+	formData.Set("q", query)
+	formData.Set("b", "")
+	formData.Set("df", args.timeSpan)
+	formData.Set("kf", "-1")
+	formData.Set("kh", "1")
+	formData.Set("kl", args.region)
+	formData.Set("kp", "-1")
+	formData.Set("k1", "-1")
+
+	body := strings.NewReader(formData.Encode())
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://html.duckduckgo.com/html", body)
+	if err != nil {
+		return nil, err
+	}
+	setHeaders(req)
+
+	resp, err := ddgClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	htmlBytes, err := io.ReadAll(decompress(resp))
+	if err != nil {
+		return nil, err
+	}
+
+	allResults := parseSearchResults(bytes.NewReader(htmlBytes))
+	if isDDGChallenge(htmlBytes) || len(allResults) == 0 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		randomDelay()
+		allResults = searchLite(args.query, args.region, args.site)
+		if len(allResults) == 0 {
+			return nil, fmt.Errorf("DDG blocked")
+		}
+	}
+
+	return allResults, nil
+}
+
+func searchBing(ctx context.Context, args cliArgs) ([]Result, error) {
+	bingURL := "https://www.bing.com/search?q=" + url.QueryEscape(args.query)
+	if args.region != "" && args.region != "us-en" {
+		mkt := args.region
+		if strings.HasPrefix(mkt, "cn-") {
+			mkt = "zh-CN"
+		}
+		bingURL += "&mkt=" + url.QueryEscape(mkt)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", bingURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", randomUA())
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Accept-Encoding", "gzip")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Bing HTTP %d", resp.StatusCode)
+	}
+
+	htmlBytes, err := io.ReadAll(decompress(resp))
+	if err != nil {
+		return nil, err
+	}
+
+	results := parseBingResults(bytes.NewReader(htmlBytes), 0)
+
+	if args.site != "" {
+		site := args.site
+		if idx := strings.IndexByte(site, '/'); idx >= 0 {
+			site = site[:idx]
+		}
+		filtered := results[:0]
+		for _, r := range results {
+			u, err := url.Parse(r.URL)
+			if err == nil && strings.HasSuffix(u.Hostname(), site) {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
+		for i := range results {
+			results[i].Index = i + 1
+		}
+	}
+
+	return results, nil
+}
+
+func decodeBingURL(trackingURL string) string {
+	// Extract the u parameter from Bing's tracking URL
+	u, err := url.Parse(trackingURL)
+	if err != nil {
+		return trackingURL
+	}
+	encoded := u.Query().Get("u")
+	if encoded == "" {
+		return trackingURL
+	}
+
+	// URL decode and try base64
+	decoded, err := url.QueryUnescape(encoded)
+	if err != nil {
+		return trackingURL
+	}
+
+	for _, prefix := range []int{0, 2} {
+		s := decoded[prefix:]
+		// Add padding
+		switch len(s) % 4 {
+		case 1:
+			s += "==="
+		case 2:
+			s += "=="
+		case 3:
+			s += "="
+		}
+		raw, err := base64.StdEncoding.DecodeString(s)
+		if err != nil {
+			continue
+		}
+		result := string(raw)
+		if strings.HasPrefix(result, "http://") || strings.HasPrefix(result, "https://") {
+			return result
+		}
+	}
+
+	return trackingURL
+}
+
+func parseBingResults(r io.Reader, maxResults int) []Result {
+	results := make([]Result, 0)
+	z := html.NewTokenizer(r)
+
+	var curTitle, curURL, curSnippet string
+	inAlgo := false
+	inH2 := false
+	inTitleLink := false
+	inSnippet := false
+
+	for {
+		tt := z.Next()
+		switch tt {
+		case html.ErrorToken:
+			if z.Err() == io.EOF {
+				return results
+			}
+			return results
+
+		case html.StartTagToken, html.SelfClosingTagToken:
+			name, hasAttrs := z.TagName()
+			tag := string(name)
+
+			if tag == "li" && hasAttrs && hasClass(getAttr(z, "class"), "b_algo") {
+				inAlgo = true
+				curTitle = ""
+				curURL = ""
+				curSnippet = ""
+				continue
+			}
+
+			if inAlgo {
+				switch {
+				case tag == "h2":
+					inH2 = true
+					continue
+				case tag == "a" && inH2 && hasAttrs:
+					href := getAttr(z, "href")
+					if strings.HasPrefix(href, "http://") || strings.HasPrefix(href, "https://") {
+						curURL = href
+						if strings.Contains(href, "bing.com/ck/") || strings.Contains(href, "bing.com/url/") {
+							if dec := decodeBingURL(href); dec != href {
+								curURL = dec
+							}
+						}
+						inTitleLink = true
+						continue
+					}
+				case tag == "p" && hasAttrs && hasClass(getAttr(z, "class"), "b_lineclamp2"):
+					inSnippet = true
+					continue
+				}
+			}
+
+		case html.EndTagToken:
+			name, _ := z.TagName()
+			tag := string(name)
+
+			if !inAlgo {
+				continue
+			}
+
+			switch tag {
+			case "li":
+				if curURL != "" && curTitle != "" {
+					results = append(results, Result{
+						Index:    len(results) + 1,
+						Title:    strings.TrimSpace(curTitle),
+						URL:      curURL,
+						Abstract: strings.TrimSpace(curSnippet),
+					})
+					if maxResults > 0 && len(results) >= maxResults {
+						return results
+					}
+				}
+				inAlgo = false
+				inH2 = false
+				inTitleLink = false
+				inSnippet = false
+			case "h2":
+				inH2 = false
+				inTitleLink = false
+			case "a":
+				inTitleLink = false
+			case "p":
+				inSnippet = false
+			}
+
+		case html.TextToken:
+			text := string(z.Text())
+			if inTitleLink {
+				curTitle += text
+			}
+			if inSnippet {
+				curSnippet += text
+			}
+		}
+	}
 }
 
 func isDDGChallenge(body []byte) bool {
@@ -493,9 +793,13 @@ func parseSearchResults(r io.Reader) []Result {
 	}
 }
 
-func searchLite(query, region string) []Result {
+func searchLite(query, region, site string) []Result {
+	q := query
+	if site != "" {
+		q += " site:" + site
+	}
 	formData := url.Values{}
-	formData.Set("q", query)
+	formData.Set("q", q)
 	formData.Set("kl", region)
 
 	body := strings.NewReader(formData.Encode())
@@ -614,6 +918,7 @@ type cliArgs struct {
 	timeSpan string
 	site     string
 	region   string
+	engine   string
 }
 
 func parseArgs() cliArgs {
@@ -657,6 +962,13 @@ func parseArgs() cliArgs {
 			} else {
 				i++
 			}
+		case "-e", "--engine":
+			if i+1 < len(args) {
+				a.engine = args[i+1]
+				i += 2
+			} else {
+				i++
+			}
 		case "-v", "--version":
 			fmt.Println("quack version", version)
 			os.Exit(0)
@@ -684,19 +996,16 @@ func parseArgs() cliArgs {
 		a.mode = modeFetch
 	} else {
 		a.mode = modeSearch
-		if a.site != "" {
-			a.query += " site:" + a.site
-		}
 	}
 
 	return a
 }
 
 func printHelp() {
-	fmt.Print(`quack — DuckDuckGo CLI search + page fetcher
+	fmt.Print(`quack — DuckDuckGo + Bing CLI search & page fetcher
 
 Usage:
-  quack KEYWORDS... [options]     search DuckDuckGo
+  quack KEYWORDS... [options]     search (parallel DDG + Bing, DDG preferred)
   quack URL [options]             fetch page content
 
 Options:
@@ -704,15 +1013,22 @@ Options:
   -t, --time SPAN   time range: d(ay), w(eek), m(onth), y(ear)
   -w, --site SITE   restrict to site
   -r, --region REG  region (default us-en), e.g. cn-zh, wt-wt
+  -e, --engine E    force engine: ddg or bing (default: both, DDG preferred)
   -v, --version
   -h, --help
 
+By default searches both DuckDuckGo and Bing in parallel.
+Output includes a "source" field indicating which engine was used.
+
 Examples:
   quack golang -n 5
+  quack -e bing golang -n 5
   quack "AI news" -n 10 -t w -r cn-zh
   quack https://go.dev/blog/
 `)
 }
+
+
 
 func printJSON(v any) {
 	enc := json.NewEncoder(os.Stdout)
