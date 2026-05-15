@@ -22,7 +22,7 @@ import (
 	"golang.org/x/net/html"
 )
 
-const version = "1.0"
+const version = "1.0.5"
 
 // dateRe matches ISO 8601 datetimes embedded in DDG snippet text.
 // dateRe matches ISO 8601 date/datetime patterns embedded in DDG snippet text.
