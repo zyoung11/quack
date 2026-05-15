@@ -5,18 +5,6 @@ description: DuckDuckGo and Bing search and web page content extraction via the 
 
 # quack
 
-## Check
-
-```bash
-quack --help
-```
-
-## Install if not exist
-
-```bash
-go install github.com/zyoung11/quack@latest
-```
-
 ## Search
 
 ```bash

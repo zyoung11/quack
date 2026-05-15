@@ -6,9 +6,7 @@ Zero configuration DuckDuckGo + Bing CLI search & page content fetcher with JSON
 
 ## Install
 
-```bash
-go install github.com/zyoung11/quack@latest
-```
+### [Releases](https://github.com/zyoung11/quack/releases)
 
 Or build from source:
 
