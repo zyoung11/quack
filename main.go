@@ -23,7 +23,7 @@ import (
 	"golang.org/x/net/html"
 )
 
-const version = "1.0.5"
+const version = "1.1.0"
 
 // dateRe matches ISO 8601 datetimes embedded in DDG snippet text.
 // dateRe matches ISO 8601 date/datetime patterns embedded in DDG snippet text.
@@ -81,6 +81,17 @@ func randomDelay() {
 
 func init() {
 	ddgClient = newDDGClient()
+
+	// Visit homepage to establish a clean session cookies before searching.
+	req, err := http.NewRequest("GET", "https://duckduckgo.com/", nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("User-Agent", randomUA())
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("DNT", "1")
+	ddgClient.Do(req)
 }
 
 func main() {
@@ -483,6 +494,7 @@ func setHeaders(req *http.Request) {
 	req.Header.Set("User-Agent", randomUA())
 	req.Header.Set("Accept-Encoding", "gzip")
 	req.Header.Set("DNT", "1")
+	req.Header.Set("Referer", "https://duckduckgo.com/")
 }
 
 func decompress(resp *http.Response) io.ReadCloser {
@@ -803,6 +815,8 @@ func searchLite(query, region, site string) []Result {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", randomUA())
 	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("DNT", "1")
+	req.Header.Set("Referer", "https://duckduckgo.com/")
 
 	resp, err := ddgClient.Do(req)
 	if err != nil {
