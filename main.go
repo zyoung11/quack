@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -46,6 +47,17 @@ type FetchResult struct {
 
 var ddgClient *http.Client
 
+func newDDGClient() *http.Client {
+	tr := &http.Transport{
+		TLSNextProto: make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		panic(err)
+	}
+	return &http.Client{Transport: tr, Jar: jar}
+}
+
 var userAgents = []string{
 	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -68,21 +80,7 @@ func randomDelay() {
 }
 
 func init() {
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		panic(err)
-	}
-	ddgClient = &http.Client{Jar: jar}
-
-	req, err := http.NewRequest("GET", "https://html.duckduckgo.com/html", nil)
-	if err != nil {
-		return
-	}
-	req.Header.Set("User-Agent", randomUA())
-	req.Header.Set("Accept", "text/html,application/xhtml+xml")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("DNT", "1")
-	ddgClient.Do(req)
+	ddgClient = newDDGClient()
 }
 
 func main() {
@@ -106,7 +104,6 @@ func doSearch(args cliArgs) {
 	var source string
 
 	if args.engine != "" {
-		// Single engine mode
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
@@ -128,7 +125,6 @@ func doSearch(args cliArgs) {
 		}
 		allResults = results
 	} else {
-		// Parallel mode: try both, DDG preferred
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
@@ -340,7 +336,6 @@ func searchBing(ctx context.Context, args cliArgs) ([]Result, error) {
 }
 
 func decodeBingURL(trackingURL string) string {
-	// Extract the u parameter from Bing's tracking URL
 	u, err := url.Parse(trackingURL)
 	if err != nil {
 		return trackingURL
@@ -350,7 +345,6 @@ func decodeBingURL(trackingURL string) string {
 		return trackingURL
 	}
 
-	// URL decode and try base64
 	decoded, err := url.QueryUnescape(encoded)
 	if err != nil {
 		return trackingURL
@@ -358,7 +352,6 @@ func decodeBingURL(trackingURL string) string {
 
 	for _, prefix := range []int{0, 2} {
 		s := decoded[prefix:]
-		// Add padding
 		switch len(s) % 4 {
 		case 1:
 			s += "==="
@@ -1027,8 +1020,6 @@ Examples:
   quack https://go.dev/blog/
 `)
 }
-
-
 
 func printJSON(v any) {
 	enc := json.NewEncoder(os.Stdout)
