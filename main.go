@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/html"
@@ -45,7 +46,22 @@ type FetchResult struct {
 	Published   string `json:"published,omitempty"`
 }
 
-var ddgClient *http.Client
+var (
+	ddgClient   *http.Client
+	ddgInitOnce sync.Once
+)
+
+func initDDGSession() {
+	req, err := http.NewRequest("GET", "https://duckduckgo.com/", nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("User-Agent", randomUA())
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("DNT", "1")
+	ddgClient.Do(req)
+}
 
 func newDDGClient() *http.Client {
 	tr := &http.Transport{
@@ -81,17 +97,6 @@ func randomDelay() {
 
 func init() {
 	ddgClient = newDDGClient()
-
-	// Visit homepage to establish a clean session cookies before searching.
-	req, err := http.NewRequest("GET", "https://duckduckgo.com/", nil)
-	if err != nil {
-		return
-	}
-	req.Header.Set("User-Agent", randomUA())
-	req.Header.Set("Accept", "text/html,application/xhtml+xml")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("DNT", "1")
-	ddgClient.Do(req)
 }
 
 func main() {
@@ -236,6 +241,7 @@ func doFetch(targetURL string, _ cliArgs) {
 }
 
 func searchDDG(ctx context.Context, args cliArgs) ([]Result, error) {
+	ddgInitOnce.Do(initDDGSession)
 	randomDelay()
 
 	query := args.query
@@ -799,6 +805,7 @@ func parseSearchResults(r io.Reader) []Result {
 }
 
 func searchLite(query, region, site string) []Result {
+	ddgInitOnce.Do(initDDGSession)
 	q := query
 	if site != "" {
 		q += " site:" + site
