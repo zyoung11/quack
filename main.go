@@ -1002,7 +1002,8 @@ func parseArgs() cliArgs {
 	}
 
 	if a.query == "" {
-		die("no keywords provided")
+		printHelp()
+		os.Exit(0)
 	}
 
 	first := strings.Fields(a.query)[0]
