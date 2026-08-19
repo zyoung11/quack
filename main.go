@@ -247,13 +247,59 @@ func doFetch(targetURL string, _ cliArgs) {
 	printJSON(output)
 }
 
+type siteFilter struct {
+	host string
+	path string
+}
+
+// parseSiteFilter splits a -w value into host and optional path prefix.
+func parseSiteFilter(site string) siteFilter {
+	s := site
+	if !strings.Contains(s, "://") {
+		s = "https://" + s
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Hostname() == "" {
+		return siteFilter{host: strings.SplitN(site, "/", 2)[0]}
+	}
+	return siteFilter{host: u.Hostname(), path: strings.TrimSuffix(u.Path, "/")}
+}
+
+func matchHost(hostname, domain string) bool {
+	return hostname == domain || strings.HasSuffix(hostname, "."+domain)
+}
+
+// filterBySite keeps results whose URL matches the -w value (domain and optional path prefix).
+func filterBySite(results []Result, site string) []Result {
+	f := parseSiteFilter(site)
+	filtered := make([]Result, 0, len(results))
+	for _, r := range results {
+		u, err := url.Parse(r.URL)
+		if err != nil || !matchHost(u.Hostname(), f.host) {
+			continue
+		}
+		if f.path == "" {
+			filtered = append(filtered, r)
+			continue
+		}
+		p := strings.TrimSuffix(u.Path, "/")
+		if p == f.path || strings.HasPrefix(p, f.path+"/") {
+			filtered = append(filtered, r)
+		}
+	}
+	for i := range filtered {
+		filtered[i].Index = i + 1
+	}
+	return filtered
+}
+
 func searchDDG(ctx context.Context, args cliArgs) ([]Result, error) {
 	ddgInitOnce.Do(initDDGSession)
 	randomDelay()
 
 	query := args.query
 	if args.site != "" {
-		query += " site:" + args.site
+		query += " site:" + parseSiteFilter(args.site).host
 	}
 
 	formData := url.Values{}
@@ -289,6 +335,9 @@ func searchDDG(ctx context.Context, args cliArgs) ([]Result, error) {
 	}
 
 	allResults := parseSearchResults(bytes.NewReader(htmlBytes))
+	if args.site != "" {
+		allResults = filterBySite(allResults, args.site)
+	}
 	if isDDGChallenge(htmlBytes) || len(allResults) == 0 {
 		select {
 		case <-ctx.Done():
@@ -297,8 +346,11 @@ func searchDDG(ctx context.Context, args cliArgs) ([]Result, error) {
 		}
 		randomDelay()
 		allResults = searchLite(args)
+		if args.site != "" {
+			allResults = filterBySite(allResults, args.site)
+		}
 		if len(allResults) == 0 {
-			return nil, fmt.Errorf("DDG blocked")
+			return nil, fmt.Errorf("no results")
 		}
 	}
 
@@ -347,21 +399,7 @@ func searchBing(ctx context.Context, args cliArgs) ([]Result, error) {
 	results := parseBingResults(bytes.NewReader(htmlBytes), 0)
 
 	if args.site != "" {
-		site := args.site
-		if idx := strings.IndexByte(site, '/'); idx >= 0 {
-			site = site[:idx]
-		}
-		filtered := results[:0]
-		for _, r := range results {
-			u, err := url.Parse(r.URL)
-			if err == nil && strings.HasSuffix(u.Hostname(), site) {
-				filtered = append(filtered, r)
-			}
-		}
-		results = filtered
-		for i := range results {
-			results[i].Index = i + 1
-		}
+		results = filterBySite(results, args.site)
 	}
 
 	return results, nil
@@ -821,7 +859,7 @@ func searchLite(args cliArgs) []Result {
 	ddgInitOnce.Do(initDDGSession)
 	q := args.query
 	if args.site != "" {
-		q += " site:" + args.site
+		q += " site:" + parseSiteFilter(args.site).host
 	}
 	formData := url.Values{}
 	formData.Set("q", q)
