@@ -26,7 +26,6 @@ import (
 
 const version = "1.1.1"
 
-// dateRe matches ISO 8601 datetimes embedded in DDG snippet text.
 // dateRe matches ISO 8601 date/datetime patterns embedded in DDG snippet text.
 var dateRe = regexp.MustCompile(`\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?)?`)
 
@@ -106,7 +105,7 @@ func main() {
 	case modeSearch:
 		doSearch(args)
 	case modeFetch:
-		doFetch(args.query, args)
+		doFetch(args.query)
 	}
 }
 
@@ -229,22 +228,15 @@ func pickPreferred(ctx context.Context, args cliArgs) ([]Result, string) {
 	return nil, ""
 }
 
-func doFetch(targetURL string, _ cliArgs) {
+type fetchOutput struct {
+	Mode      string `json:"mode"`
+	Timestamp string `json:"timestamp"`
+	FetchResult
+}
+
+func doFetch(targetURL string) {
 	result := fetchPage(targetURL)
-	output := map[string]any{
-		"mode":      "fetch",
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"title":     result.Title,
-		"url":       result.URL,
-		"text":      result.Text,
-	}
-	if result.Description != "" {
-		output["description"] = result.Description
-	}
-	if result.Published != "" {
-		output["published"] = result.Published
-	}
-	printJSON(output)
+	printJSON(fetchOutput{"fetch", time.Now().UTC().Format(time.RFC3339), result})
 }
 
 type siteFilter struct {
@@ -396,7 +388,7 @@ func searchBing(ctx context.Context, args cliArgs) ([]Result, error) {
 		return nil, err
 	}
 
-	results := parseBingResults(bytes.NewReader(htmlBytes), 0)
+	results := parseBingResults(bytes.NewReader(htmlBytes))
 
 	if args.site != "" {
 		results = filterBySite(results, args.site)
@@ -443,7 +435,7 @@ func decodeBingURL(trackingURL string) string {
 	return trackingURL
 }
 
-func parseBingResults(r io.Reader, maxResults int) []Result {
+func parseBingResults(r io.Reader) []Result {
 	results := make([]Result, 0)
 	z := html.NewTokenizer(r)
 
@@ -514,9 +506,6 @@ func parseBingResults(r io.Reader, maxResults int) []Result {
 						URL:      curURL,
 						Abstract: strings.TrimSpace(curSnippet),
 					})
-					if maxResults > 0 && len(results) >= maxResults {
-						return results
-					}
 				}
 				inAlgo = false
 				inH2 = false
