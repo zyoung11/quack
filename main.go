@@ -24,7 +24,7 @@ import (
 	"golang.org/x/net/html"
 )
 
-const version = "1.1.1"
+const version = "1.2.0"
 
 // dateRe matches ISO 8601 date/datetime patterns embedded in DDG snippet text.
 var dateRe = regexp.MustCompile(`\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?)?`)
