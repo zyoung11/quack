@@ -279,7 +279,11 @@ func searchDDG(ctx context.Context, args cliArgs) ([]Result, error) {
 	}
 	defer resp.Body.Close()
 
-	htmlBytes, err := io.ReadAll(decompress(resp))
+	reader, err := decompress(resp)
+	if err != nil {
+		return nil, err
+	}
+	htmlBytes, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +335,11 @@ func searchBing(ctx context.Context, args cliArgs) ([]Result, error) {
 		return nil, fmt.Errorf("Bing HTTP %d", resp.StatusCode)
 	}
 
-	htmlBytes, err := io.ReadAll(decompress(resp))
+	reader, err := decompress(resp)
+	if err != nil {
+		return nil, err
+	}
+	htmlBytes, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, err
 	}
@@ -510,17 +518,11 @@ func setHeaders(req *http.Request) {
 	req.Header.Set("Referer", "https://duckduckgo.com/")
 }
 
-func decompress(resp *http.Response) io.ReadCloser {
-	switch resp.Header.Get("Content-Encoding") {
-	case "gzip":
-		reader, err := gzip.NewReader(resp.Body)
-		if err != nil {
-			die("decompress: %v", err)
-		}
-		return reader
-	default:
-		return resp.Body
+func decompress(resp *http.Response) (io.ReadCloser, error) {
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		return gzip.NewReader(resp.Body)
 	}
+	return resp.Body, nil
 }
 
 func fetchPage(targetURL string) FetchResult {
@@ -542,7 +544,10 @@ func fetchPage(targetURL string) FetchResult {
 		die("fetch page: HTTP %d", resp.StatusCode)
 	}
 
-	reader := decompress(resp)
+	reader, err := decompress(resp)
+	if err != nil {
+		die("decompress: %v", err)
+	}
 	doc, err := html.Parse(reader)
 	if err != nil {
 		die("parse HTML: %v", err)
@@ -840,7 +845,11 @@ func searchLite(args cliArgs) []Result {
 	}
 	defer resp.Body.Close()
 
-	htmlBytes, err := io.ReadAll(decompress(resp))
+	reader, err := decompress(resp)
+	if err != nil {
+		return nil
+	}
+	htmlBytes, err := io.ReadAll(reader)
 	if err != nil {
 		return nil
 	}
