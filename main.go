@@ -600,12 +600,18 @@ var skipTags = map[string]bool{
 }
 
 func extractBodyText(doc *html.Node, maxChars int) string {
-	var buf strings.Builder
-	buf.Grow(maxChars)
+	var out []byte
+
+	tail := func() byte {
+		if len(out) == 0 {
+			return 0
+		}
+		return out[len(out)-1]
+	}
 
 	var walk func(*html.Node, bool)
 	walk = func(n *html.Node, newBlock bool) {
-		if buf.Len() >= maxChars {
+		if len(out) >= maxChars {
 			return
 		}
 
@@ -613,23 +619,18 @@ func extractBodyText(doc *html.Node, maxChars int) string {
 			if skipTags[n.Data] {
 				return
 			}
-			if blockLevelTags[n.Data] && buf.Len() > 0 && lastByte(buf) != '\n' {
-				buf.WriteByte('\n')
+			if blockLevelTags[n.Data] && tail() != '\n' {
+				out = append(out, '\n')
 			}
 		}
 
 		if n.Type == html.TextNode {
 			text := strings.TrimSpace(n.Data)
-			if text != "" {
-				if len(text) > 2 || newBlock {
-					if buf.Len() > 0 {
-						last := lastByte(buf)
-						if last != '\n' && last != ' ' {
-							buf.WriteByte(' ')
-						}
-					}
-					buf.WriteString(text)
+			if text != "" && (len(text) > 2 || newBlock) {
+				if t := tail(); t != '\n' && t != ' ' {
+					out = append(out, ' ')
 				}
+				out = append(out, text...)
 			}
 		}
 
@@ -638,8 +639,8 @@ func extractBodyText(doc *html.Node, maxChars int) string {
 			walk(c, isBlock)
 		}
 
-		if n.Type == html.ElementNode && blockLevelTags[n.Data] && buf.Len() > 0 && lastByte(buf) != '\n' {
-			buf.WriteByte('\n')
+		if n.Type == html.ElementNode && blockLevelTags[n.Data] && tail() != '\n' {
+			out = append(out, '\n')
 		}
 	}
 
@@ -663,7 +664,7 @@ func extractBodyText(doc *html.Node, maxChars int) string {
 		walk(doc, true)
 	}
 
-	result := buf.String()
+	result := string(out)
 	for strings.Contains(result, "\n\n\n") {
 		result = strings.ReplaceAll(result, "\n\n\n", "\n\n")
 	}
@@ -1091,12 +1092,4 @@ func hasAttrExist(z *html.Tokenizer, key string) bool {
 		}
 	}
 	return false
-}
-
-func lastByte(buf strings.Builder) byte {
-	s := buf.String()
-	if len(s) == 0 {
-		return 0
-	}
-	return s[len(s)-1]
 }
