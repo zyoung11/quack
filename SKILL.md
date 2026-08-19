@@ -27,7 +27,7 @@ Outputs JSON with title, text content, and optional description/published time.
 |------|-------------|
 | `-n N` | Result count (default 10) |
 | `-t SPAN` | Time range: d, w, m, y |
-| `-w SITE` | Restrict to site (domain or domain/path) |
+| `-w SITE` | Restrict to site (domain or domain/path, matches subdomains) |
 | `-r REG` | Region (default us-en), e.g. cn-zh |
 | `-e E` | Force engine: `ddg` or `bing` (default: both) |
 | `-v` | Print version |
@@ -40,5 +40,6 @@ quack "golang generics" -n 5
 quack -e bing "golang" -n 5
 quack "News" -n 10 -t w -r cn-zh
 quack -w "go.dev" "golang"
+quack -w "go.dev/doc" "golang docs"
 quack "https://go.dev/blog/"
 ```

@@ -1071,7 +1071,7 @@ Usage:
 Options:
   -n, --num N       result count (default 10)
   -t, --time SPAN   time range: d(ay), w(eek), m(onth), y(ear)
-  -w, --site SITE   restrict to site
+  -w, --site SITE   restrict to site (domain or domain/path)
   -r, --region REG  region (default us-en), e.g. cn-zh, wt-wt
   -e, --engine E    force engine: ddg or bing (default: both, DDG preferred)
   -v, --version
