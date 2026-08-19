@@ -143,59 +143,7 @@ func doSearch(args cliArgs) {
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-
-		type engineResult struct {
-			name    string
-			results []Result
-		}
-
-		ch := make(chan engineResult, 2)
-
-		go func() {
-			results, err := searchDDG(ctx, args)
-			if err == nil {
-				select {
-				case ch <- engineResult{"ddg", results}:
-				case <-ctx.Done():
-				}
-			}
-		}()
-
-		go func() {
-			results, err := searchBing(ctx, args)
-			if err == nil {
-				select {
-				case ch <- engineResult{"bing", results}:
-				case <-ctx.Done():
-				}
-			}
-		}()
-
-		var ddgResults, bingResults []Result
-	loop:
-		for range 2 {
-			select {
-			case r := <-ch:
-				if r.name == "ddg" {
-					ddgResults = r.results
-				} else {
-					bingResults = r.results
-				}
-			case <-ctx.Done():
-				break loop
-			}
-		}
-
-		switch {
-		case ddgResults != nil:
-			allResults = ddgResults
-			source = "ddg"
-		case bingResults != nil:
-			allResults = bingResults
-			source = "bing"
-		default:
-			die("all search engines failed")
-		}
+		allResults, source = pickPreferred(ctx, args)
 	}
 
 	if args.num > 0 && args.num < len(allResults) {
@@ -220,6 +168,65 @@ func doSearch(args cliArgs) {
 	}
 
 	printJSON(output)
+}
+
+// pickPreferred races both engines and returns DDG results as soon as they
+// arrive without waiting for Bing. If DDG fails or is empty it waits for Bing instead.
+func pickPreferred(ctx context.Context, args cliArgs) ([]Result, string) {
+	type engineResult struct {
+		name    string
+		results []Result
+		err     error
+	}
+
+	ok := func(r *engineResult) bool {
+		return r != nil && r.err == nil && len(r.results) > 0
+	}
+
+	ch := make(chan engineResult, 2)
+
+	go func() {
+		results, err := searchDDG(ctx, args)
+		select {
+		case ch <- engineResult{"ddg", results, err}:
+		case <-ctx.Done():
+		}
+	}()
+
+	go func() {
+		results, err := searchBing(ctx, args)
+		select {
+		case ch <- engineResult{"bing", results, err}:
+		case <-ctx.Done():
+		}
+	}()
+
+	var ddgRes, bingRes *engineResult
+	wait:
+	for range 2 {
+		select {
+		case r := <-ch:
+			if r.name == "ddg" {
+				ddgRes = &r
+			} else {
+				bingRes = &r
+			}
+			if ok(ddgRes) {
+				break wait
+			}
+		case <-ctx.Done():
+			break wait
+		}
+	}
+
+	switch {
+	case ok(ddgRes):
+		return ddgRes.results, "ddg"
+	case ok(bingRes):
+		return bingRes.results, "bing"
+	}
+	die("all search engines failed")
+	return nil, ""
 }
 
 func doFetch(targetURL string, _ cliArgs) {
