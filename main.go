@@ -292,7 +292,7 @@ func searchDDG(ctx context.Context, args cliArgs) ([]Result, error) {
 		default:
 		}
 		randomDelay()
-		allResults = searchLite(args.query, args.region, args.site)
+		allResults = searchLite(args)
 		if len(allResults) == 0 {
 			return nil, fmt.Errorf("DDG blocked")
 		}
@@ -812,15 +812,16 @@ func parseSearchResults(r io.Reader) []Result {
 	}
 }
 
-func searchLite(query, region, site string) []Result {
+func searchLite(args cliArgs) []Result {
 	ddgInitOnce.Do(initDDGSession)
-	q := query
-	if site != "" {
-		q += " site:" + site
+	q := args.query
+	if args.site != "" {
+		q += " site:" + args.site
 	}
 	formData := url.Values{}
 	formData.Set("q", q)
-	formData.Set("kl", region)
+	formData.Set("kl", args.region)
+	formData.Set("df", args.timeSpan)
 
 	body := strings.NewReader(formData.Encode())
 	req, err := http.NewRequest("POST", "https://lite.duckduckgo.com/lite/", body)
